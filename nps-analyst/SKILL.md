@@ -806,11 +806,24 @@ Instalá este skill: npx skills add lucastossolini-despe/skills --skill nps-anal
 Actualizá mis skills: npx skills update
 ```
 
-### Repositorio
+### Regla: pushear cambios a GitHub
 
-https://github.com/lucastossolini-despe/skills
+⚠️ OBLIGATORIO: toda modificación al SKILL.md (local o en el sandbox) debe pushearse al repositorio de GitHub como paso final.
+
+**Flujo:**
+1. Editar el SKILL.md localmente (commit en el sandbox con mensaje `docs: ...`).
+2. Leer el SHA actual del archivo en GitHub:
+   `Github_get_file_contents owner=lucastossolini-despe repo=skills path=nps-analyst/SKILL.md`
+3. Pushear con el SHA obtenido:
+   `Github_create_or_update_file owner=lucastossolini-despe repo=skills branch=main path=nps-analyst/SKILL.md sha=<SHA> message="docs: ..." content=<contenido completo>`
+
+Sin este paso, la versión en GitHub queda desactualizada y otros usuarios que instalen o actualicen la skill recibirán una versión vieja.
 
 ### Requisitos
 
 - Acceso al data lake de Despegar
 - Acceso a los Google Docs del Knowledge Base NPS (solicitar acceso a Lucas Tossolini si no los tenés)
+
+### Repositorio
+
+https://github.com/lucastossolini-despe/skills
