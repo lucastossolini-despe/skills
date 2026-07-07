@@ -1,23 +1,33 @@
 ---
 name: nps-analyst
 description: >
-  Análisis de NPS (Net Promoter Score) para Despegar/Decolar. Se activa cuando el usuario pide:
-  cortes de NPS, métricas de promotores/detractores, promoter rate, detractor rate, queries sobre
-  encuestas de satisfacción, tablas del data lake relacionadas con NPS (asrpt_clusters_hmc,
-  asci_nps_secuence_metrics, bi_nps_fact_surveys, bi_requests_fact_header, dp_checkout_fact_recovery,
-  asci_motivos_detraccion_gpt, as_call_fact_detail, bi_message_fact_header, entre otras), journey NPS,
-  buy failures NPS, segmentos A1-C3, contact center y NPS (PCRC, Service Level), motivos de
-  detracción, cumplimiento de targets NPS, o cualquier consulta sobre el KPI NPS de Despegar/Decolar.
-  NO se activa para SQL genérico, Excel, presentaciones, o métricas distintas a NPS.
+  Análisis de NPS (Net Promoter Score) y experiencia del cliente para Despegar/Decolar. Se activa
+  cuando el usuario pide: cortes de NPS, NPS ponderado, NPS real, métricas de promotores/detractores,
+  promoter rate, detractor rate, queries sobre encuestas de satisfacción, satisfacción del cliente,
+  experiencia del cliente, score de satisfacción, score de experiencia, posventa, análisis de
+  posventa, verbatims, opiniones de clientes, encuestas, tablas del data lake relacionadas con NPS
+  (asrpt_clusters_hmc, asci_nps_secuence_metrics, bi_nps_fact_surveys, bi_requests_fact_header,
+  dp_checkout_fact_recovery, asci_motivos_detraccion_gpt, as_call_fact_detail, bi_message_fact_header,
+  entre otras), journey NPS, buy failures, análisis de cancelaciones, análisis de reprogramaciones,
+  segmentos A1-C3, contact center, PCRC, TMO, tasa de contacto, Service Level, motivos de detracción,
+  cumplimiento de targets NPS, o cualquier consulta sobre el KPI NPS de Despegar/Decolar. También se
+  activa cuando el analista menciona explícitamente esta skill, el Knowledge Base NPS, o pide usar el
+  KB de NPS para cualquier análisis, aunque no sea exclusivamente de NPS.
+  NO se activa para SQL genérico, Excel, o presentaciones sin contexto de NPS o experiencia del cliente.
 ---
 
 # NPS Analyst Skill
 
 ## Activación
 
-Esta skill se activa cuando el analista pide análisis de NPS, cortes de NPS, queries sobre encuestas de satisfacción, tablas del data lake relacionadas con NPS, métricas de promotores/detractores, journey NPS, buy failures NPS, segmentos A1-C3, contact center y NPS, o cualquier consulta que involucre el KPI NPS de Despegar/Decolar.
+Esta skill se activa en cualquiera de estos casos:
 
+1. **Pedido explícito de NPS:** cortes de NPS, NPS ponderado, NPS real, promoter/detractor rate, encuestas NPS, journey NPS, targets NPS, cumplimiento NPS.
+2. **Satisfacción y experiencia del cliente:** satisfacción del cliente, experiencia del cliente, score de satisfacción, score de experiencia, verbatims, opiniones de clientes, posventa.
+3. **Análisis relacionados con las tablas del KB:** buy failures, cancelaciones, reprogramaciones, contact center, PCRC, TMO, tasa de contacto, Service Level, segmentos A1-C3, motivos de detracción.
+4. **Activación explícita por el analista:** cuando el analista menciona esta skill, el Knowledge Base NPS, o pide explícitamente "usá el KB de NPS" / "activá el NPS analyst" / "consultá el KB" — aunque el análisis no sea de NPS puro. En ese caso, leer el KB completo antes de responder.
 
+**NO se activa** para SQL genérico sin contexto de NPS o experiencia del cliente, ni para Excel o presentaciones standalone.
 ## Flujo de trabajo
 
 ```
@@ -31,15 +41,17 @@ Paso 3 — En CUALQUIER otro caso (ambigüedad, múltiples dominios, metodologí
 ⚠️ REGLA DE ORO: ante la duda, SIEMPRE leer el KB completo.
    Es mejor leer de más que construir un query incorrecto.
 
-Knowledge Base NPS (documento completo):
+Knowledge Base NPS — FUENTE DE VERDAD (Google Doc, siempre leer de aquí):
   GoogleWorkspace_get_doc_as_markdown
     document_id: 1Ml4u029GmDBc68x8FvOYBfxOkkyLGqeOVASRxDTlXSc
+
+⚠️ IMPORTANTE: El archivo local data/nps-kb/knowledge_base_nps_v3_2.md es una copia
+secundaria de referencia. El generador SIEMPRE debe leer el Google Doc, no el archivo local.
 
 Guía de ruteo detallada (referencia opcional, NO es paso obligatorio):
   GoogleWorkspace_get_doc_as_markdown
     document_id: 1JAov4S3SWvsxcHeqrC-snI2Mf19D5-GJHv_CeOCba18
 ```
-
 
 ## Tabla de ruteo compacta
 
@@ -68,19 +80,14 @@ Guía de ruteo detallada (referencia opcional, NO es paso obligatorio):
 
 **Si el caso no está en esta tabla, o si el pedido combina más de un caso, o si hay alguna ambigüedad: leer el KB COMPLETO.**
 
-
 ## SQL embebido: NPS Ponderado y Real — Pedido recurrente
-
 
 SQL para responder el pedido recurrente "dame el NPS ponderado y real de los últimos N meses".
 Fuente: `data.lake.asrpt_clusters_hmc`. Escala: -1 a 1 (igual que los targets). NO multiplicar por 100.
-
-
 **⚠️ Cómo calcular las fechas:**
 - FECHA_INICIO = primer día del primer mes solicitado
 - FECHA_FIN    = primer día del mes siguiente al último solicitado
 - Ejemplo para ene–jun 2026: FECHA_INICIO = '2026-01-01', FECHA_FIN = '2026-07-01'
-
 
 ```sql
 WITH rta AS (
@@ -143,7 +150,6 @@ Cuando el resultado sea el pedido recurrente "NPS ponderado y real", o el KPI ge
 - NPS formateado como porcentaje con 1 decimal (ej: 43.5%)
 - Delta con flecha ▲/▼ y color verde/rojo
 - Guardar en `data/nps-general/tabla_nps_ponderado_YYYY-MM_YYYY-MM.html`
-
 **CSS mínimo:**
 ```css
 table { border-collapse: collapse; width: 100%; font-family: Arial, sans-serif; }
@@ -254,8 +260,6 @@ Cuando el analista pide análisis, apertura o corte de NPS por journey para pres
 2. Generar el HTML con el CSS y estructura documentados abajo.
 3. Guardar en `data/nps-journey/tabla_nps_<region>_<meses>_<año>.html`.
 4. El archivo `data/nps-journey/tabla_nps_brasil_q2_2026.html` puede usarse como validación visual pero **NO es la fuente de verdad del estilo** — este documento lo es.
-
-
 #### CSS embebido (copiar tal cual en el `<style>` del HTML)
 
 ```css
@@ -278,6 +282,7 @@ body {
     overflow: hidden;
     box-shadow: 0 4px 20px rgba(0,0,0,0.08);
 }
+/* Header */
 .header {
     background: linear-gradient(135deg, #5B21B6 0%, #4C1D95 100%);
     color: white;
@@ -307,6 +312,7 @@ body {
     font-size: 0.9rem;
     opacity: 0.9;
 }
+/* Table */
 .table-wrapper {
     overflow-x: auto;
 }
@@ -315,6 +321,7 @@ table {
     border-collapse: collapse;
     font-size: 0.85rem;
 }
+/* Section headers */
 .section-header {
     background: #4C1D95;
     color: white;
@@ -326,6 +333,7 @@ table {
 .section-header td {
     padding: 10px 12px;
 }
+/* Sub-section headers (journey_l2 name) */
 .row-header {
     background: #f9fafb;
 }
@@ -344,6 +352,7 @@ table {
     font-weight: 400;
     margin-top: 2px;
 }
+/* Month headers */
 .month-header {
     background: #6B21A8;
     color: white;
@@ -372,6 +381,7 @@ table {
 .sub-header td {
     padding: 6px 4px;
 }
+/* Data rows */
 .data-row td {
     padding: 10px 8px;
     border-bottom: 1px solid #e5e7eb;
@@ -389,6 +399,7 @@ table {
     background: #f9fafb;
     padding: 8px 12px;
 }
+/* NPS values */
 .nps-value {
     font-size: 1.4rem;
     font-weight: 700;
@@ -403,6 +414,7 @@ table {
 .nps-neutral {
     color: #6b7280;
 }
+/* Delta values */
 .delta {
     font-size: 0.72rem;
     margin-top: 2px;
@@ -417,6 +429,7 @@ table {
 .delta-flat {
     color: #6b7280;
 }
+/* Share bars */
 .share-bar-container {
     margin-bottom: 6px;
 }
@@ -475,6 +488,7 @@ table {
     background: currentColor;
     margin-right: 4px;
 }
+/* Footer */
 .footer {
     padding: 12px 28px;
     font-size: 0.7rem;
@@ -486,6 +500,7 @@ table {
     font-style: italic;
     margin-top: 4px;
 }
+/* Sticky first column */
 .sticky-col {
     position: sticky;
     left: 0;
@@ -501,6 +516,7 @@ table {
 .row-header .sticky-col {
     background: #f9fafb;
 }
+/* Row label column styling */
 .row-label {
     min-width: 160px;
     background: white;
@@ -508,6 +524,7 @@ table {
 .row-header .row-label {
     background: #f9fafb;
 }
+/* Survey count indicators */
 .survey-count {
     font-size: 0.6rem;
     color: #9ca3af;
@@ -530,7 +547,7 @@ table {
 
 **Fila de headers de mes (row 1):**
 - Primera celda: sticky-col row-label con `background: #6B21A8` (vacía)
-- Una celda por mes con `colspan="2"` + `border-right: 1px solid rgba(255,255,255,0.2)`
+- Una celda por mes con `colspan="2"` + `border-right: 1px solid rgba(255,255,255,0.2)"`
 - Contenido: nombre del mes en mayúsculas + contador de encuestas (□ Total · ● Top)
 - Última celda: `rowspan="3"`, `background: #6B21A8`, texto "SHARE" + mes de referencia
 
@@ -541,15 +558,13 @@ table {
 **Secciones (section-header):**
 - Fila `<tr class="section-header">` con el nombre de sección en la primera celda
 - Secciones en orden: MIV — MACHINE PURO → CONTACTO → BACK
-- Primera celda: sticky-col row-label con `background: #4C1D95`
-
+-Primera celda: sticky-col row-label con `background: #4C1D95`
 **Filas de datos (data-row):**
 - Primera celda: sticky-col row-label con `.bucket-name` + `.bucket-subtitle`
 - Cada mes: celda `.cell-total` + celda `.cell-top` (con `border-right`)
 - NPS: `<div class="nps-value nps-positive|negative|neutral">+XX.X</div>`
 - Delta: `<div class="delta delta-up|down|flat">▲|▼ X.X</div>`
 - Celda Share: `.cell-share` con barras `.bar-total` (azul) y `.bar-top` (amarillo)
-
 
 **Nombres de display para buckets:**
 - `machine_puro` → "Machine Puro" / subtítulo "sofia + solo_miv"
@@ -558,7 +573,6 @@ table {
 - `friccion` → "Fricción" / subtítulo "Con fricción"
 - `sin_friccion_asistido` → "Sin fric. Asistido" / subtítulo "Sin fricción — asistido"
 - `sin_friccion_no_asistido` → "Sin fric. No Asistido" / subtítulo "Sin fricción — no asist."
-
 
 **Footer:**
 ```html
@@ -625,15 +639,16 @@ Sección [X.X] del Knowledge Base NPS v3.2
 - [Variante o corte adicional relacionado]
 ```
 
-
 ## Cómo actualizar el Knowledge Base NPS
 
 Esta skill también se activa cuando el usuario pide modificar, corregir, agregar o actualizar contenido del Knowledge Base NPS.
 
+⚠️ FUENTE DE VERDAD: El Knowledge Base NPS vive en Google Docs (document_id: 1Ml4u029GmDBc68x8FvOYBfxOkkyLGqeOVASRxDTlXSc). Toda actualización DEBE aplicarse primero al Google Doc. El archivo local data/nps-kb/knowledge_base_nps_v3_2.md es una copia secundaria que puede actualizarse en paralelo pero NUNCA es la fuente principal.
+
 ### Flujo de actualización
 
 **Paso 1 — Leer el KB completo**
-Antes de cualquier edición, leer el documento completo:
+Antes de cualquier edición, leer el documento completo DESDE EL GOOGLE DOC:
 ```
 GoogleWorkspace_get_doc_as_markdown
   document_id: 1Ml4u029GmDBc68x8FvOYBfxOkkyLGqeOVASRxDTlXSc
@@ -661,7 +676,6 @@ Después de cada operación de reemplazo, reportar:
 - Qué texto se buscó y qué se insertó/reemplazó.
 - Si se requirió adaptar la frase buscada y por qué.
 - Que no se modificó contenido fuera del alcance del cambio pedido.
-
 ### Criterios de calidad para ediciones del KB
 - Toda advertencia crítica debe estar marcada con ⚠️ y ubicada en el lugar donde la IA podría cometer el error, no solo en una sección general.
 - Los snippets SQL deben usar Trino y seguir el patrón de CTEs del resto del documento.
@@ -681,7 +695,6 @@ Después de cada operación de reemplazo, reportar:
 Este skill está publicado en GitHub en `lucastossolini-despe/skills`.
 
 ### Cómo instalar (primera vez)
-
 Abrir una conversación con ToqanClaw y pegar:
 
 ```
@@ -690,11 +703,9 @@ Instalá este skill: npx skills add lucastossolini-despe/skills --skill nps-anal
 
 ### Cómo actualizar (cuando haya una versión nueva)
 
-
 ```
 Actualizá mis skills: npx skills update
 ```
-
 
 ### Repositorio
 
