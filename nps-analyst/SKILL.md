@@ -28,6 +28,7 @@ Esta skill se activa en cualquiera de estos casos:
 4. **Activación explícita por el analista:** cuando el analista menciona esta skill, el Knowledge Base NPS, o pide explícitamente "usá el KB de NPS" / "activá el NPS analyst" / "consultá el KB" — aunque el análisis no sea de NPS puro. En ese caso, leer el KB completo antes de responder.
 
 **NO se activa** para SQL genérico sin contexto de NPS o experiencia del cliente, ni para Excel o presentaciones standalone.
+
 ## Flujo de trabajo
 
 ```
@@ -59,10 +60,10 @@ Guía de ruteo detallada (referencia opcional, NO es paso obligatorio):
 |---|---|---|
 | NPS por journey / journey_l2 (formato estándar) | 2.6.1 | ⚠️ Usar asci_nps_secuence_metrics. Delay 6 días. Ver SQL embebido abajo. |
 | NPS por journey L2 desagregado (sofia y solo_miv por separado) | 2.6.2 | Solo cuando se pide explícitamente sin Machine Puro |
-| NPS ponderado y real (últimos N meses) | SQL embebido abajo | ⭐ PEDIDO RECURRENTE. Ejecutar SQL, mostrar tabla HTML. Escala -1 a 1. |
+| NPS ponderado y real (últimos N meses) | SQL embebido abajo | ⭐ PEDIDO RECURRENTE. Ejecutar SQL, mostrar tabla markdown. Escala -1 a 1. |
 | NPS general (últimos N meses, sin journey) | 2.1.1 | Tabla asrpt_clusters_hmc por defecto |
 | NPS por mes con delta | 2.1.2 + 1.2-A | Requiere LAG |
-| NPS por región/país | 2.1.4 | Campo country_code en tabla principal |
+| NPS por región | 2.1.4 | Campo `region` (Hispa/Brasil) \|Campo `country_code` para cortes por país (ej: BR, MX) |
 | NPS por cluster (Human vs Machine) | 2.1.5 | Campo cluster_human_machine |
 | NPS por segmento A1-C3 | 2.6.3 + 1.2-F | Join con bi_customer_dim_segmentation_pv |
 | NPS Top User / Pasaporte Global | 2.6.4 | flg_top_user = 1 |
@@ -84,63 +85,142 @@ Guía de ruteo detallada (referencia opcional, NO es paso obligatorio):
 
 SQL para responder el pedido recurrente "dame el NPS ponderado y real de los últimos N meses".
 Fuente: `data.lake.asrpt_clusters_hmc`. Escala: -1 a 1 (igual que los targets). NO multiplicar por 100.
+
 **⚠️ Cómo calcular las fechas:**
 - FECHA_INICIO = primer día del primer mes solicitado
 - FECHA_FIN    = primer día del mes siguiente al último solicitado
 - Ejemplo para ene–jun 2026: FECHA_INICIO = '2026-01-01', FECHA_FIN = '2026-07-01'
 
 ```sql
-WITH rta AS (
-    -- NPS real por type (sobre respondidas)
-    SELECT
-        nps_answer_yearmonth                              AS periodo,
-        type,
-        CAST(SUM(flg_answered)   AS DOUBLE)              AS respondidos,
-        CAST(SUM(flg_nps_result) AS DOUBLE)              AS resultado
-    FROM data.lake.asrpt_clusters_hmc
-    WHERE (sended_date     BETWEEN DATE 'FECHA_INICIO' AND DATE 'FECHA_FIN')
-       OR (nps_answer_date BETWEEN DATE 'FECHA_INICIO' AND DATE 'FECHA_FIN')
-      AND nps_answer_yearmonth >= '2024-01'
-    GROUP BY 1, 2
-    HAVING SUM(CASE WHEN nps_answer_date IS NOT NULL THEN 1 ELSE 0 END) > 0
-),
-env AS (
-    -- Share de envíos por type (sobre enviadas con flg_sent)
-    SELECT
-        date_format(sended_date, '%Y-%m')                AS periodo,
-        type,
-        CAST(SUM(flg_sent) AS DOUBLE)
-            / CAST(SUM(SUM(flg_sent)) OVER (
-                PARTITION BY date_format(sended_date, '%Y-%m')
-              ) AS DOUBLE)                               AS share
-    FROM data.lake.asrpt_clusters_hmc
-    WHERE (sended_date     BETWEEN DATE 'FECHA_INICIO' AND DATE 'FECHA_FIN')
-       OR (nps_answer_date BETWEEN DATE 'FECHA_INICIO' AND DATE 'FECHA_FIN')
-      AND nps_answer_yearmonth >= '2024-01'
-    GROUP BY 1, 2
-)
+-- NPS Ponderado y Real | Tabla: asrpt_clusters_hmc
+-- Parámetros:
+--   FECHA_INICIO / FECHA_FIN: rango de fechas (ej: '2026-01-01' / '2026-07-01')
+--   FILTRO_REGION: AND region = 'Hispa' | AND region = 'Brasil' | (vacío para Total)
+--   FILTRO_REGION_SHARE: mismo valor que FILTRO_REGION (aplica en ambos bloques)
+
 SELECT
-    g.periodo                                AS Periodo,
-    SUM(g.resultado_ponderado)               AS NPS_Ponderado,
-    SUM(g.resultado) / SUM(g.respondidos)    AS NPS_Real
+    g.mes_respuesta                            AS Periodo,
+    SUM(g.resultado_ponderado)                 AS NPS_Ponderado,
+    SUM(g.resultado) / SUM(g.respondidos)      AS NPS_Real
 FROM (
     SELECT
-        r.periodo,
+        r.mes_respuesta,
         r.type,
         r.resultado,
         r.respondidos,
         e.share,
         (r.resultado / r.respondidos) * e.share AS resultado_ponderado
-    FROM rta r
-    LEFT JOIN env e ON r.periodo = e.periodo AND r.type = e.type
+    FROM (
+        -- Bloque NPS: resultado y respondidos por type
+        SELECT
+            nps_answer_yearmonth                          AS mes_respuesta,
+            type,
+            CAST(SUM(flg_answered)   AS DOUBLE)           AS respondidos,
+            CAST(SUM(flg_nps_result) AS DOUBLE)           AS resultado
+        FROM data.lake.asrpt_clusters_hmc
+        WHERE ((sended_date     BETWEEN DATE 'FECHA_INICIO' AND DATE 'FECHA_FIN')
+           OR  (nps_answer_date BETWEEN DATE 'FECHA_INICIO' AND DATE 'FECHA_FIN'))
+        FILTRO_REGION
+        GROUP BY 1, 2
+        HAVING SUM(CASE WHEN nps_answer_date IS NOT NULL THEN 1 ELSE 0 END) > 0
+    ) r
+    LEFT JOIN (
+        -- Bloque share: proporción de envíos por type dentro del mes
+        SELECT
+            mes_envio,
+            type,
+            CAST(enc_pond AS DOUBLE)
+                / CAST(SUM(enc_pond) OVER (PARTITION BY mes_envio) AS DOUBLE) AS share
+        FROM (
+            SELECT
+                date_format(sended_date, '%Y-%m')         AS mes_envio,
+                type,
+                CAST(SUM(flg_sent) AS DOUBLE)             AS enc_pond
+            FROM data.lake.asrpt_clusters_hmc
+            WHERE ((sended_date     BETWEEN DATE 'FECHA_INICIO' AND DATE 'FECHA_FIN')
+               OR  (nps_answer_date BETWEEN DATE 'FECHA_INICIO' AND DATE 'FECHA_FIN'))
+            FILTRO_REGION_SHARE
+            GROUP BY 1, 2
+        )
+    ) e ON r.mes_respuesta = e.mes_envio AND r.type = e.type
 ) g
 GROUP BY 1
 ORDER BY 1
 ```
 
+⚠️ FILTRO_REGION y FILTRO_REGION_SHARE son el MISMO valor y van en ambos bloques:
+- Total → omitir ambos
+- Hispa  → `AND region = 'Hispa'` en ambos
+- Brasil → `AND region = 'Brasil'` en ambos
+
+⚠️ CORTES Y APERTURA: ejecutar la query UNA VEZ por cada corte solicitado (región, país, cluster, etc.).
+   Para cada corte:
+   - El FILTRO va en AMBOS bloques (NPS y share) con el mismo valor.
+   - Antes de filtrar, consultar el KB para conocer los valores válidos de la columna,
+     o ejecutar: SELECT DISTINCT <columna> FROM data.lake.asrpt_clusters_hmc LIMIT 50
+   - Si se piden N cortes (ej: Total + Hispa + Brasil), ejecutar N queries separadas.
+   El bloque de share calcula el mix de encuestas enviadas por TYPE (CUSTOMERCARE, MYTRIPS, etc.)
+   dentro del corte solicitado — NO por cluster (HUMAN/MACHINE).
+
+⚠️ La diferencia clave vs el SQL anterior incorrecto: el share usa una subquery anidada (primero SUM(flg_sent), luego window function sobre ese resultado), no window-on-aggregate directo. Esto es lo que produce el ponderado correcto.
+
 ⚠️ NPS Ponderado y NPS Real en escala -1 a 1. Los targets también están en esa escala (ej: 0.42 = 42%).
 ⚠️ El share se calcula con `SUM(flg_sent)` (enviadas), no con `COUNT(DISTINCT survey_id)`.
 ⚠️ El NPS por type se calcula con `SUM(flg_nps_result)/SUM(flg_answered)`, no con `AVG`.
+⚠️ El campo `type` representa el TIPO DE ENCUESTA (ej: CUSTOMERCARE, MYTRIPS, POST_BOOKING, etc.),
+   NO el cluster de atención (HUMAN/MACHINE). La ponderación opera sobre el mix de types,
+   no sobre el mix de clusters.
+
+## Formato de salida: tabla markdown para NPS Ponderado y Real
+
+Cuando el pedido sea "dame el NPS ponderado y real [de los últimos N meses / por región / filtro básico]" sin contexto adicional de presentación formal, usar **tabla markdown en chat** como formato de salida primario.
+
+### Cuándo aplicar
+
+- Pedidos directos de NPS ponderado y real (total o con filtros: región, cluster, segmento)
+- Análisis exploratorios o consultas rápidas
+- Cuando el analista NO pida explícitamente HTML, PPT o reporte formal
+
+### Estructura
+
+**Una tabla por corte solicitado**, precedida por encabezado con emoji:
+- 🌎 Total Compañía
+- 🇧🇷 Brasil
+- 🌎 Hispanoamérica
+- (adaptar según filtro aplicado)
+
+**Columnas:**
+| Columna | Formato | Ejemplo |
+|---------|---------|---------|
+| Período | "Ene 2026" | Ene 2026 |
+| NPS Ponderado | % con 1 decimal | 43.4% |
+| NPS Real | % con 1 decimal | 38.8% |
+| Δ Ponderado | ▲/▼ X.X pts · `—` en primer mes | ▲ 1.0 pts |
+
+- Negrita (`**`) en valores máximos/mínimos destacables del período
+- Separador `---` entre tablas de distintos cortes
+
+### Ejemplo
+
+```markdown
+## 🌎 Total Compañía
+
+| Período | NPS Ponderado | NPS Real | Δ Ponderado |
+|---------|:-------------:|:--------:|:-----------:|
+| Ene 2026 | 43.4% | 38.8% | — |
+| Feb 2026 | 42.7% | 37.4% | ▼ 0.8 pts |
+| Mar 2026 | 43.7% | 38.8% | ▲ 1.0 pts |
+| May 2026 | **44.5%** | **38.9%** | **▲ 0.9 pts** |
+| Jun 2026 | 43.6% | 37.9% | ▼ 0.9 pts |
+```
+
+### Puntos destacados (debajo de todas las tablas)
+
+Agregar 2-4 bullets con insights clave: comparación entre regiones, mejor/peor mes, tendencia general, y diferencia típica Ponderado vs Real.
+
+### Formato HTML alternativo
+
+Si el analista pide explícitamente **HTML** o **reporte para presentar/compartir**, usar la sección "Formato de salida: tabla HTML para NPS Ponderado y Real" a continuación.
 
 ## Formato de salida: tabla HTML para NPS Ponderado y Real
 
@@ -260,6 +340,7 @@ Cuando el analista pide análisis, apertura o corte de NPS por journey para pres
 2. Generar el HTML con el CSS y estructura documentados abajo.
 3. Guardar en `data/nps-journey/tabla_nps_<region>_<meses>_<año>.html`.
 4. El archivo `data/nps-journey/tabla_nps_brasil_q2_2026.html` puede usarse como validación visual pero **NO es la fuente de verdad del estilo** — este documento lo es.
+
 #### CSS embebido (copiar tal cual en el `<style>` del HTML)
 
 ```css
@@ -558,7 +639,8 @@ table {
 **Secciones (section-header):**
 - Fila `<tr class="section-header">` con el nombre de sección en la primera celda
 - Secciones en orden: MIV — MACHINE PURO → CONTACTO → BACK
--Primera celda: sticky-col row-label con `background: #4C1D95`
+- Primera celda: sticky-col row-label con `background: #4C1D95`
+
 **Filas de datos (data-row):**
 - Primera celda: sticky-col row-label con `.bucket-name` + `.bucket-subtitle`
 - Cada mes: celda `.cell-total` + celda `.cell-top` (con `border-right`)
@@ -586,7 +668,7 @@ table {
 
 | Tabla | Uso |
 |-------|-----|
-| `data.lake.asrpt_clusters_hmc` | Tabla principal NPS (mes en curso y 2025+). Campos: flg_nps_result, flg_promoter, flg_detractor, flg_passive, cluster_human_machine, flg_top_user |
+| `data.lake.asrpt_clusters_hmc` | Tabla principal NPS (mes en curso y 2025+). Campos: flg_nps_result, flg_promoter, flg_detractor, flg_passive, cluster_human_machine, flg_top_user, region, country_code, type |
 | `data.lake.asci_nps_secuence_metrics` | NPS por journey y journey_l2. ⚠️ Delay de 6 días |
 | `data.lake.bi_nps_fact_surveys` | Tabla de encuestas NPS |
 | `data.lake.bi_customer_dim_segmentation_pv` | Segmentación A1-C3 (join con from/to_datetime) |
@@ -603,6 +685,22 @@ table {
 | `data.lake.asci_targets_npspv` | Targets NPS y cumplimiento |
 | `data.lake.apocalypse_transactions` | Transacciones de contingencia (flg_contingencia) |
 | `data.lake.genesys_conversation_v2` | Conversaciones telephony para Service Level |
+
+
+## Definiciones de campos geográficos
+
+⚠️ `region` y `country_code` NO son equivalentes. Usar el campo correcto según el nivel de apertura:
+
+- `region`: agrupación geográfica de alto nivel. Valores: 'Hispa' (Hispanoamérica) y 'Brasil'.
+  Usar para cortes a nivel regional.
+
+- `country_code`: código de país ISO (ej: 'AR', 'BR', 'MX', 'CO', 'CL', etc.).
+  Usar para cortes a nivel de país individual. Granularidad más fina que `region`.
+  NO es equivalente a `region`.
+
+**Tabla de ruteo geográfica:**
+- Corte regional (Hispa/Brasil) → campo `region`
+- Corte por país individual → campo `country_code`
 
 ## Comportamiento esperado al responder
 
@@ -676,6 +774,7 @@ Después de cada operación de reemplazo, reportar:
 - Qué texto se buscó y qué se insertó/reemplazó.
 - Si se requirió adaptar la frase buscada y por qué.
 - Que no se modificó contenido fuera del alcance del cambio pedido.
+
 ### Criterios de calidad para ediciones del KB
 - Toda advertencia crítica debe estar marcada con ⚠️ y ubicada en el lugar donde la IA podría cometer el error, no solo en una sección general.
 - Los snippets SQL deben usar Trino y seguir el patrón de CTEs del resto del documento.
