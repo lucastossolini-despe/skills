@@ -271,9 +271,6 @@ tr:nth-child(even) { background-color: #f2f2f2; }
 SELECT
     nps_answer_yearmonth                                                          AS Periodo,
     CAST(SUM(flg_answered)  AS DOUBLE)                                            AS Respondidos,
-    CAST(SUM(flg_promoter)  AS DOUBLE)                                            AS Promotores,
-    CAST(SUM(flg_detractor) AS DOUBLE)                                            AS Detractores,
-    CAST(SUM(flg_passive)   AS DOUBLE)                                            AS Pasivos,
     ROUND(
         CAST(SUM(flg_nps_result) AS DOUBLE) / NULLIF(SUM(flg_answered), 0),
         4
@@ -289,7 +286,7 @@ GROUP BY nps_answer_yearmonth
 ORDER BY nps_answer_yearmonth
 ```
 
-**Formato de salida:** tabla markdown en chat (igual que NPS ponderado/real). Columnas: Período | Respondidos | Promotores | Detractores | NPS Real | Δ. NPS formateado como % con 1 decimal. Δ con ▲/▼.
+**Formato de salida:** tabla markdown en chat. Columnas: **Período | Respondidos | NPS Real | Δ** únicamente. Sin promotores, detractores ni pasivos. NPS formateado como % con 1 decimal. Δ con ▲/▼. **Gráfico: solo a pedido explícito del usuario.**
 
 ## SQL embebido: NPS por Journey (sección 2.6.1)
 
