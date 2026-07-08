@@ -67,11 +67,11 @@ Guía de ruteo detallada (referencia opcional, NO es paso obligatorio):
 | NPS por cluster (Human vs Machine) | 2.1.5 | Campo cluster_human_machine |
 | NPS por segmento A1-C3 | 2.6.3 + 1.2-F | Join con bi_customer_dim_segmentation_pv |
 | NPS Top User / Pasaporte Global | 2.6.4 | flg_top_user = 1 |
-| ⭐ NPS por tipo de solicitud (Reprogramaciones, Cancelaciones, Cambios, etc.) | 2.3.0 | Filtro directo: type = 'CUSTOMERCARE' + request_type = '<tipo>'. SIN join. Solo hacer join a tablas de flujo si se pide wake_up_date, code_subtype, cancel_method, aging u otro atributo adicional. |
+| ⭐ NPS por tipo de solicitud (Reprogramaciones, Cancelaciones, Cambios, etc.) | 2.3.0 + SQL embebido | ⚠️ USAR SQL embebido sección 2.3.0. Filtro OBLIGATORIO: type = 'CUSTOMERCARE' + request_type = '<tipo>'. SIN join. Solo hacer join si se pide wake_up_date, code_subtype, cancel_method, aging u otro atributo adicional. |
 | NPS buy failures | 2.3.3 | ⚠️ Excluir NO_ISSUE |
-| NPS cancelaciones (solo NPS) | 2.3.0 | Filtro directo: type = 'CUSTOMERCARE' + request_type = 'CANCEL'. Sin joins. |
+| NPS cancelaciones (solo NPS) | 2.3.0 + SQL embebido | ⚠️ USAR SQL embebido sección 2.3.0 con request_type = 'CANCEL'. Sin joins. |
 | NPS cancelaciones con cancel_method | 2.3.4 | ⚠️ Solo cuando se necesite cancel_method → join con bi_requests_fact_cancellations. Excluir NO_ISSUE |
-| NPS reprogramaciones (solo NPS) | 2.3.0 | Filtro directo: type = 'CUSTOMERCARE' + request_type = 'RESCHEDULING'. Sin joins. |
+| NPS reprogramaciones (solo NPS) | 2.3.0 + SQL embebido | ⚠️ USAR SQL embebido sección 2.3.0 con request_type = 'RESCHEDULING'. Sin joins. |
 | NPS reprogramaciones con atributos de flujo | 2.4.2 | Requiere wake_up_date, code_subtype, aging → join con bi_requests_fact_rescheduling o clerk_rs_rescheduling |
 | NPS por aérea/carrier | 2.6.11 | Join con bi_transactional_fact_products |
 | NPS por hotel o destino | 2.6.9 / 2.6.10 | Mínimo 30 respuestas |
@@ -243,6 +243,54 @@ tr:nth-child(even) { background-color: #f2f2f2; }
 .delta-neg { color: #dc3545; font-weight: bold; }
 ```
 
+## SQL embebido: NPS por tipo de solicitud (sección 2.3.0) ⭐
+
+⚠️ USAR ESTE SQL cuando el analista pida NPS de un tipo específico de solicitud: Reprogramaciones, Cancelaciones, Cambios de vuelo, Consultas, etc.
+⚠️ El filtro `request_type` es OBLIGATORIO. Omitirlo devuelve todo CUSTOMERCARE, no el tipo solicitado.
+⚠️ NO requiere join con tablas de flujo. Solo hacer join si se pide wake_up_date, code_subtype, cancel_method, aging u otro atributo adicional.
+
+**Valores de `request_type` más comunes:**
+- `'RESCHEDULING'` — Reprogramaciones (36.4%)
+- `'CANCEL'` — Cancelaciones (34.3%)
+- `'CHANGE_FLIGHT'` — Cambios de vuelo (9.6%)
+- `'INQUIRY'` — Consultas (7.9%)
+- `'CHANGE_FLIGHT_DATA'` — Cambios de datos de vuelo (6.1%)
+- `'SPECIAL'` — Solicitudes especiales (3.2%)
+
+**Parámetros a reemplazar:**
+- `REQUEST_TYPE` → valor de la lista arriba (ej: `'RESCHEDULING'`)
+- `FECHA_INICIO` → primer día del período solicitado (ej: `'2025-01'`)
+- `FILTRO_REGION` → `AND region = 'Hispa'` / `AND region = 'Brasil'` / omitir para total
+- `FILTRO_CLUSTER` → `AND cluster_human_machine = 'HUMAN'` / `AND cluster_human_machine = 'MACHINE'` / omitir para total
+
+```sql
+-- NPS por tipo de solicitud específica | Tabla: asrpt_clusters_hmc
+-- Sección KB: 2.3.0
+-- Parámetros: REQUEST_TYPE, FECHA_INICIO, FILTRO_REGION (opcional), FILTRO_CLUSTER (opcional)
+
+SELECT
+    nps_answer_yearmonth                                                          AS Periodo,
+    CAST(SUM(flg_answered)  AS DOUBLE)                                            AS Respondidos,
+    CAST(SUM(flg_promoter)  AS DOUBLE)                                            AS Promotores,
+    CAST(SUM(flg_detractor) AS DOUBLE)                                            AS Detractores,
+    CAST(SUM(flg_passive)   AS DOUBLE)                                            AS Pasivos,
+    ROUND(
+        CAST(SUM(flg_nps_result) AS DOUBLE) / NULLIF(SUM(flg_answered), 0),
+        4
+    )                                                                             AS NPS_Real
+FROM data.lake.asrpt_clusters_hmc
+WHERE nps_answer_yearmonth >= 'FECHA_INICIO'
+  AND flg_nps_result IS NOT NULL
+  AND type = 'CUSTOMERCARE'
+  AND request_type = 'REQUEST_TYPE'   -- ⚠️ OBLIGATORIO — nunca omitir para solicitudes específicas
+  -- FILTRO_REGION                    -- ej: AND region = 'Hispa'
+  -- FILTRO_CLUSTER                   -- ej: AND cluster_human_machine = 'HUMAN'
+GROUP BY nps_answer_yearmonth
+ORDER BY nps_answer_yearmonth
+```
+
+**Formato de salida:** tabla markdown en chat (igual que NPS ponderado/real). Columnas: Período | Respondidos | Promotores | Detractores | NPS Real | Δ. NPS formateado como % con 1 decimal. Δ con ▲/▼.
+
 ## SQL embebido: NPS por Journey (sección 2.6.1)
 
 SQL completo para NPS por journey + journey_l2 con Machine Puro, deltas y share.
@@ -331,19 +379,353 @@ ORDER BY journey, journey_l2, mes
 > ⚠️ El delta se calcula en el cliente comparando cada fila con el mes N-1 del mismo `journey_l2`.
 > ⚠️ Validar mínimo 30 respuestas por bucket antes de mostrar NPS Top en Machine Puro.
 
+## Formato HTML para Journey NPS
+
+### Cuándo aplica
+
+Cuando el analista pide análisis, apertura o corte de NPS por journey para presentar o compartir (no solo SQL o datos crudos).
+
+### Pasos
+
+1. Ejecutar el SQL embebido arriba (o la sección 2.6.1 del KB si hay dudas).
+2. Generar el HTML con el CSS y estructura documentados abajo.
+3. Guardar en `data/nps-journey/tabla_nps_<region>_<meses>_<año>.html`.
+4. El archivo `data/nps-journey/tabla_nps_brasil_q2_2026.html` puede usarse como validación visual pero **NO es la fuente de verdad del estilo** — este documento lo es.
+
+#### CSS embebido (copiar tal cual en el `<style>` del HTML)
+
+```css
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f3f4f6;
+    padding: 20px;
+    color: #1f2937;
+}
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    background: white;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+}
+/* Header */
+.header {
+    background: linear-gradient(135deg, #5B21B6 0%, #4C1D95 100%);
+    color: white;
+    padding: 24px 28px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+.logo {
+    width: 48px;
+    height: 48px;
+    background: #7C3AED;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+.header-text h1 {
+    font-size: 1.4rem;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+.header-text p {
+    font-size: 0.9rem;
+    opacity: 0.9;
+}
+/* Table */
+.table-wrapper {
+    overflow-x: auto;
+}
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+/* Section headers */
+.section-header {
+    background: #4C1D95;
+    color: white;
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+}
+.section-header td {
+    padding: 10px 12px;
+}
+/* Sub-section headers (journey_l2 name) */
+.row-header {
+    background: #f9fafb;
+}
+.row-header td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #e5e7eb;
+}
+.bucket-name {
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: #1f2937;
+}
+.bucket-subtitle {
+    font-size: 0.72rem;
+    color: #6b7280;
+    font-weight: 400;
+    margin-top: 2px;
+}
+/* Month headers */
+.month-header {
+    background: #6B21A8;
+    color: white;
+    text-align: center;
+    font-weight: 600;
+}
+.month-header td {
+    padding: 8px 6px;
+}
+.month-name {
+    font-size: 0.85rem;
+    font-weight: 700;
+}
+.month-surveys {
+    font-size: 0.65rem;
+    opacity: 0.85;
+    margin-top: 2px;
+}
+.sub-header {
+    background: #7E22CE;
+    color: white;
+    text-align: center;
+    font-size: 0.7rem;
+    font-weight: 500;
+}
+.sub-header td {
+    padding: 6px 4px;
+}
+/* Data rows */
+.data-row td {
+    padding: 10px 8px;
+    border-bottom: 1px solid #e5e7eb;
+    vertical-align: middle;
+}
+.cell-total {
+    background: white;
+    text-align: center;
+}
+.cell-top {
+    background: #FFFBEB;
+    text-align: center;
+}
+.cell-share {
+    background: #f9fafb;
+    padding: 8px 12px;
+}
+/* NPS values */
+.nps-value {
+    font-size: 1.4rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+.nps-positive {
+    color: #16A34A;
+}
+.nps-negative {
+    color: #DC2626;
+}
+.nps-neutral {
+    color: #6b7280;
+}
+/* Delta values */
+.delta {
+    font-size: 0.72rem;
+    margin-top: 2px;
+    font-weight: 500;
+}
+.delta-up {
+    color: #16A34A;
+}
+.delta-down {
+    color: #DC2626;
+}
+.delta-flat {
+    color: #6b7280;
+}
+/* Share bars */
+.share-bar-container {
+    margin-bottom: 6px;
+}
+.share-label {
+    font-size: 0.65rem;
+    color: #6b7280;
+    margin-bottom: 2px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.share-bar {
+    height: 12px;
+    border-radius: 6px;
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+.bar-total {
+    background: #3B82F6;
+    height: 100%;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 6px;
+    min-width: 30px;
+}
+.bar-top {
+    background: #F59E0B;
+    height: 100%;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 6px;
+    min-width: 30px;
+}
+.bar-value {
+    font-size: 0.6rem;
+    font-weight: 600;
+    color: white;
+}
+.icon-square {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border: 1.5px solid currentColor;
+    margin-right: 4px;
+}
+.icon-circle {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    margin-right: 4px;
+}
+/* Footer */
+.footer {
+    padding: 12px 28px;
+    font-size: 0.7rem;
+    color: #6b7280;
+    background: #f9fafb;
+    border-top: 1px solid #e5e7eb;
+}
+.footer-note {
+    font-style: italic;
+    margin-top: 4px;
+}
+/* Sticky first column */
+.sticky-col {
+    position: sticky;
+    left: 0;
+    z-index: 10;
+    background: inherit;
+}
+.data-row .sticky-col {
+    background: white;
+}
+.data-row:nth-child(even) .sticky-col {
+    background: #f9fafb;
+}
+.row-header .sticky-col {
+    background: #f9fafb;
+}
+/* Row label column styling */
+.row-label {
+    min-width: 160px;
+    background: white;
+}
+.row-header .row-label {
+    background: #f9fafb;
+}
+/* Survey count indicators */
+.survey-count {
+    font-size: 0.6rem;
+    color: #9ca3af;
+    margin-top: 2px;
+}
+```
+
+#### Especificación de estructura HTML
+
+**Header:**
+```html
+<div class="header">
+  <div class="logo">D</div>
+  <div class="header-text">
+    <h1>HIGHLIGHTS DEL MES — NPS POST VENTA</h1>
+    <p>Abr · May · Jun 2026* | Región Brasil</p>
+  </div>
+</div>
+```
+
+**Fila de headers de mes (row 1):**
+- Primera celda: sticky-col row-label con `background: #6B21A8` (vacía)
+- Una celda por mes con `colspan="2"` + `border-right: 1px solid rgba(255,255,255,0.2)"`
+- Contenido: nombre del mes en mayúsculas + contador de encuestas (□ Total · ● Top)
+- Última celda: `rowspan="3"`, `background: #6B21A8`, texto "SHARE" + mes de referencia
+
+**Fila sub-headers (row 2):**
+- Primera celda: sticky-col row-label con `background: #7E22CE` (vacía)
+- Por cada mes: celda "□ Total" + celda "● Top" con `border-right`
+**Secciones (section-header):**
+- Fila `<tr class="section-header">` con el nombre de sección en la primera celda
+- Secciones en orden: MIV — MACHINE PURO → CONTACTO → BACK
+-Primera celda: sticky-col row-label con `background: #4C1D95`
+**Filas de datos (data-row):**
+- Primera celda: sticky-col row-label con `.bucket-name` + `.bucket-subtitle`
+- Cada mes: celda `.cell-total` + celda `.cell-top` (con `border-right`)
+- NPS: `<div class="nps-value nps-positive|negative|neutral">+XX.X</div>`
+- Delta: `<div class="delta delta-up|down|flat">▲|▼ X.X</div>`
+- Celda Share: `.cell-share` con barras `.bar-total` (azul) y `.bar-top` (amarillo)
+
+**Nombres de display para buckets:**
+- `machine_puro` → "Machine Puro" / subtítulo "sofia + solo_miv"
+- `HUMAN` → "Human" / subtítulo "Agente humano"
+- `MACHINE` → "Machine" / subtítulo "Bot / máquina"
+- `friccion` → "Fricción" / subtítulo "Con fricción"
+- `sin_friccion_asistido` → "Sin fric. Asistido" / subtítulo "Sin fricción — asistido"
+- `sin_friccion_no_asistido` → "Sin fric. No Asistido" / subtítulo "Sin fricción — no asist."
+
+**Footer:**
+```html
+<div class="footer">
+  Generado por ToqanClaw · Fuente: asci_nps_secuence_metrics · Brasil · Abr–Jun 2026
+  <div class="footer-note">*Jun 2026 con datos al 06/07/2026</div>
+</div>
+```
+
 ## Tablas clave de referencia
 
 | Tabla | Uso |
 |-------|-----|
-| `data.lake.asrpt_clusters_hmc` | Tabla principal NPS (mes en curso y 2025+). Campos: flg_nps_result, flg_promoter, flg_detractor, flg_passive, cluster_human_machine, flg_top_user, region, country_code, type, request_type |
+| `data.lake.asrpt_clusters_hmc` | Tabla principal NPS (mes en curso y 2025+). Campos: flg_nps_result, flg_promoter, flg_detractor, flg_passive, cluster_human_machine, flg_top_user, region, country_code, type |
 | `data.lake.asci_nps_secuence_metrics` | NPS por journey y journey_l2. ⚠️ Delay de 6 días |
 | `data.lake.bi_nps_fact_surveys` | Tabla de encuestas NPS |
 | `data.lake.bi_customer_dim_segmentation_pv` | Segmentación A1-C3 (join con from/to_datetime) |
 | `data.lake.bi_transactional_fact_transactions` | Tabla transaccional madre |
 | `data.lake.bi_transactional_fact_products` | Productos: hotel_name, destination_city_code, intrip_flag, flg_lowcost |
-| `data.lake.bi_requests_fact_header` | Requests: atributos adicionales (code_type, state, razón). Requiere join. |
+| `data.lake.bi_requests_fact_header` | Requests: request_type, request_state, creation_date |
 | `data.lake.bi_requests_fact_cancellations` | Cancelaciones. ⚠️ Campo cancel_method incluye NO_ISSUE |
-| `data.lake.clerk_rs_rescheduling` | Reprogramaciones: wake_up_date (solo si se necesita ese atributo) |
+| `data.lake.clerk_rs_rescheduling` | Reprogramaciones: wake_up_date |
 | `data.lake.dp_checkout_fact_recovery` | Buy failures: buy_failure_segment |
 | `data.lake.asci_motivos_detraccion_gpt` | Clasificación GPT de verbatims de detracción |
 | `data.lake.asrpt_nps_agente_detallado` | NPS a nivel agente individual |
